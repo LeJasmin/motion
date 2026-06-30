@@ -2,93 +2,152 @@
 ================================================================================
   Trier-Documents.ps1
   --------------------------------------------------------------------------
-  Scanne ton dossier Documents, regroupe / trie / renomme tes fichiers
+  Scanne ton dossier Documents, regroupe / trie / RENOMME tes fichiers
   par affaire judiciaire et par dossier :
 
       Affaire SSDH | Affaire Azzouz | These | Sante | Famille | Administratif
 
-  >>> PAR DEFAUT : MODE SIMULATION. Le script NE DEPLACE RIEN. <<<
-      Il affiche seulement le plan de classement et cree un fichier Excel
-      recapitulatif (Plan-de-classement.csv) que tu peux ouvrir et verifier.
+  CONVENTION DE NOMMAGE (d'apres ton systeme "Second Cerveau") :
+      Affaire/Dossier - contenu du document - date (si necessaire)
+      ex :  Affaire SSDH - Conclusions - 2024-06-20.pdf
+            These - Chapitre 2 redaction.docx
 
-  Quand le plan te convient, relance avec l'option  -Executer  pour
-  effectuer reellement le tri.
+  STRUCTURE DE L'AFFAIRE SSDH (d'apres ta fiche master, 3 volets) :
+      Affaire SSDH\
+          1. Volet juridique
+          2. Volet logement social
+          3. Volet sinistres
+          0. A classer            (pieces non reconnues)
+
+  >>> PAR DEFAUT : MODE SIMULATION. Le script NE DEPLACE RIEN. <<<
+      Il affiche le plan de classement + les nouveaux noms, et cree un
+      fichier Excel recapitulatif (Plan-de-classement.csv) a verifier.
 
   --------------------------------------------------------------------------
-  UTILISATION (clic droit > Executer avec PowerShell, ou dans une console) :
+  UTILISATION (clic droit > Executer avec PowerShell, ou en console) :
 
-    # 1) Voir le plan, sans rien toucher (recommande en premier) :
+    # 1) Voir le plan + les nouveaux noms, sans rien toucher :
     powershell -ExecutionPolicy Bypass -File .\Trier-Documents.ps1
 
-    # 2) Une fois le plan verifie, faire le vrai tri :
+    # 2) Une fois verifie, faire le vrai tri (deplace + renomme) :
     powershell -ExecutionPolicy Bypass -File .\Trier-Documents.ps1 -Executer
 
-    # Variante encore plus prudente : COPIER au lieu de DEPLACER
-    powershell -ExecutionPolicy Bypass -File .\Trier-Documents.ps1 -Executer -Copier
+  OPTIONS :
+    -Copier        Copie au lieu de deplacer (les originaux restent en place)
+    -GarderNoms    Range les fichiers SANS les renommer (garde le nom d'origine)
+    -AvecDate      Ajoute toujours la date AAAA-MM-JJ (sinon seulement si utile)
+    -SansSousDossiers   Met l'affaire SSDH a plat (pas de 3 volets)
 
-    # Ajouter la date (AAAA-MM-JJ) devant chaque nom de fichier :
-    powershell -ExecutionPolicy Bypass -File .\Trier-Documents.ps1 -Executer -Renommer
-
-  Apres un vrai tri, un script  Annuler-le-tri.ps1  est cree : il permet
-  de TOUT remettre comme avant si besoin.
+  Apres un vrai tri, un script  Annuler-le-tri.ps1  est cree pour tout
+  remettre comme avant si besoin.
 ================================================================================
 #>
 
 param(
-    # Dossier a scanner. Par defaut : ton dossier Documents.
     [string]$Source = "$env:USERPROFILE\Documents",
-
-    # Ou ranger les dossiers tries. Par defaut : Documents\_Classement.
     [string]$Destination = "$env:USERPROFILE\Documents\_Classement",
-
-    # Sans ce flag => SIMULATION (rien n'est deplace). Avec => vrai tri.
     [switch]$Executer,
-
-    # Copie les fichiers au lieu de les deplacer (les originaux restent).
     [switch]$Copier,
-
-    # Ajoute la date de modif (AAAA-MM-JJ_) devant chaque nom de fichier.
-    [switch]$Renommer
+    [switch]$GarderNoms,
+    [switch]$AvecDate,
+    [switch]$SansSousDossiers
 )
 
-# --- Reglages d'affichage (accents corrects dans la console) -----------------
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $ErrorActionPreference = "Stop"
 
 # ============================================================================
-#  1) DEFINITION DES DOSSIERS ET DES MOTS-CLES
-#     -> Tu peux ajouter / retirer des mots-cles librement ci-dessous.
+#  1) DOSSIERS, MOTS-CLES, ET SOUS-DOSSIERS
+#     -> Tu peux modifier librement les listes de mots-cles ci-dessous.
 #     L'ordre compte : les affaires nominatives passent en premier.
 # ============================================================================
 $Categories = @(
-    [pscustomobject]@{ Nom = "Affaire SSDH";    Mots = @("ssdh") },
-    [pscustomobject]@{ Nom = "Affaire Azzouz";  Mots = @("azzouz") },
-    [pscustomobject]@{ Nom = "These";           Mots = @(
-        "these","thesis","doctorat","doctorant","manuscrit","soutenance",
-        "chapitre","bibliographie","biblio","recherche","laboratoire",
-        "article","publication","corpus","directeur de these","jury") },
-    [pscustomobject]@{ Nom = "Sante";           Mots = @(
-        "sante","medical","medecin","docteur","ordonnance","analyse",
-        "radio","irm","scanner","labo","laboratoire d analyse","mutuelle",
-        "cpam","ameli","secu","remboursement","hopital","clinique",
-        "dentiste","ophtalmo","kine","vaccin","carnet de sante","arret de travail") },
-    [pscustomobject]@{ Nom = "Famille";         Mots = @(
-        "famille","enfant","bebe","mariage","naissance","bapteme","photo",
-        "vacances","noel","anniversaire","livret de famille","scolaire",
-        "ecole","college","lycee","bulletin","cantine","garde","pension") },
-    [pscustomobject]@{ Nom = "Administratif";   Mots = @(
-        "impot","impots","fisc","facture","edf","engie","eau","internet",
-        "assurance","banque","releve","rib","contrat","bail","loyer",
-        "quittance","caf","pole emploi","france travail","urssaf","attestation",
-        "carte d identite","passeport","permis","amende","contravention",
-        "courrier","lettre","devis","abonnement","cotisation","retraite") }
+
+    [pscustomobject]@{
+        Nom  = "Affaire SSDH"
+        Mots = @(
+            "ssdh","seine saint denis habitat","seine-saint-denis habitat",
+            "oph","lebcir vs","jcp ssdh","lr ssdh","insalubrite","amiante",
+            "degat des eaux","degats des eaux","fsl","plan d apurement",
+            "apurement","pacifica","espacil","tribunal de proximite",
+            "rapport d expertise","reconnaissance","dde","mage")
+        # Sous-dossiers = les 3 volets de ta fiche master (+ "0. A classer")
+        SousDossiers = @(
+            [pscustomobject]@{ Nom = "1. Volet juridique"; Mots = @(
+                "juridique","conclusion","conclusions","tribunal","jcp","juge",
+                "assignation","audience","plaidoirie","requete","avocat",
+                "mise en demeure","lettre recommandee","lr ","jugement",
+                "citation","huissier","signification","proximite","plainte","plaintes") },
+            [pscustomobject]@{ Nom = "3. Volet sinistres"; Mots = @(
+                "sinistre","degat des eaux","degats des eaux","expertise","expert",
+                "assurance","pacifica","insalubrite","amiante","dde",
+                "reconnaissance","catastrophe","gare") },
+            [pscustomobject]@{ Nom = "2. Volet logement social"; Mots = @(
+                "logement social","relogement","reloge","bail","dalo",
+                "demande de logement","attribution","val d oise","val-d'oise",
+                "commission","syplo","fsl","apurement","quittance","loyer") }
+        )
+    },
+
+    [pscustomobject]@{
+        Nom  = "Affaire Azzouz"
+        # >>> A COMPLETER : ajoute ici les mots qui identifient cette affaire
+        #     (nom de la partie adverse, n0 de RG, bailleur, etc.)
+        Mots = @("azzouz")
+        SousDossiers = @()
+    },
+
+    [pscustomobject]@{
+        Nom  = "These"
+        Mots = @(
+            "these","thesis","doctorat","doctorant","doctorante","manuscrit",
+            "soutenance","chapitre","bibliographie","biblio","zotero",
+            "auto-ethno","autoethno","ethnographie","corpus","jury",
+            "directrice de these","directeur de these","sic","colloque",
+            "publication","article scientifique","cadre theorique","methodo")
+        SousDossiers = @()
+    },
+
+    [pscustomobject]@{
+        Nom  = "Sante"
+        Mots = @(
+            "sante","medical","medecin","docteur","ordonnance","analyse",
+            "radio","irm","scanner","labo","mutuelle","cpam","ameli","secu",
+            "remboursement","hopital","clinique","dentiste","ophtalmo","kine",
+            "vaccin","carnet de sante","arret de travail","expertise medicale",
+            "psychologue","therapie","nutrition")
+        SousDossiers = @()
+    },
+
+    [pscustomobject]@{
+        Nom  = "Famille"
+        Mots = @(
+            "famille","carmen","montessori","luna","enfant","bebe","mariage",
+            "naissance","bapteme","photo","vacances","noel","anniversaire",
+            "livret de famille","scolaire","ecole","creche","cantine","garde",
+            "pension","maman","couple")
+        SousDossiers = @()
+    },
+
+    [pscustomobject]@{
+        Nom  = "Administratif"
+        Mots = @(
+            "impot","impots","fisc","facture","edf","engie","eau","internet",
+            "assurance","banque","releve","rib","contrat","caf","pole emploi",
+            "france travail","urssaf","attestation","carte d identite",
+            "passeport","permis","amende","contravention","courrier","lettre",
+            "devis","abonnement","cotisation","retraite","numerise")
+        SousDossiers = @()
+    }
 )
 
-# Dossier ou vont les fichiers qui ne correspondent a AUCUN mot-cle
-# (rien n'est jamais perdu).
+# Dossier pour les fichiers qui ne correspondent a AUCUNE categorie.
 $DossierNonClasse = "A trier manuellement"
+# Sous-dossier par defaut quand une affaire a des volets mais que la piece
+# n'en touche aucun.
+$SousDossierDefaut = "0. A classer"
 
-# Extensions considerees comme "documents". Mets $true pour TOUT inclure.
+# Extensions considerees comme "documents". $true => inclure TOUS les fichiers.
 $ToutInclure = $false
 $ExtensionsDocs = @(
     ".pdf",".doc",".docx",".odt",".rtf",".txt",".md",
@@ -99,50 +158,75 @@ $ExtensionsDocs = @(
 )
 
 # ============================================================================
-#  2) FONCTIONS UTILITAIRES
+#  2) FONCTIONS
 # ============================================================================
-
-# Enleve les accents pour comparer (e = e accent, etc.)
 function Remove-Diacritics {
     param([string]$Text)
     if ([string]::IsNullOrEmpty($Text)) { return "" }
     $norm = $Text.Normalize([Text.NormalizationForm]::FormD)
     $sb = New-Object System.Text.StringBuilder
     foreach ($c in $norm.ToCharArray()) {
-        $cat = [Globalization.CharUnicodeInfo]::GetUnicodeCategory($c)
-        if ($cat -ne [Globalization.UnicodeCategory]::NonSpacingMark) {
+        if ([Globalization.CharUnicodeInfo]::GetUnicodeCategory($c) -ne [Globalization.UnicodeCategory]::NonSpacingMark) {
             [void]$sb.Append($c)
         }
     }
     return $sb.ToString()
 }
 
-# Normalise un texte pour la recherche de mots-cles.
 function Normaliser {
     param([string]$Text)
     $t = Remove-Diacritics $Text
     $t = $t.ToLower()
-    # Remplace tout ce qui n'est pas lettre/chiffre par un espace
     $t = [Regex]::Replace($t, "[^a-z0-9]+", " ")
     return " " + $t.Trim() + " "
 }
 
-# Trouve la categorie d'un fichier d'apres son chemin (dossiers + nom).
-function Trouver-Categorie {
+# Renvoie $true si l'un des mots-cles est present dans le texte normalise.
+function Contient-MotCle {
+    param([string]$HayNormalise, [string[]]$Mots)
+    foreach ($mot in $Mots) {
+        if ($HayNormalise.Contains((Normaliser $mot))) { return $true }
+    }
+    return $false
+}
+
+# Trouve la categorie (et le sous-dossier eventuel) d'un fichier.
+function Trouver-Classement {
     param([string]$CheminRelatif)
     $hay = Normaliser $CheminRelatif
     foreach ($cat in $Categories) {
-        foreach ($mot in $cat.Mots) {
-            $m = Normaliser $mot
-            if ($hay.Contains($m)) {
-                return $cat.Nom
+        if (Contient-MotCle $hay $cat.Mots) {
+            $sous = ""
+            if (-not $SansSousDossiers -and $cat.SousDossiers -and $cat.SousDossiers.Count -gt 0) {
+                $sous = $SousDossierDefaut
+                foreach ($sd in $cat.SousDossiers) {
+                    if (Contient-MotCle $hay $sd.Mots) { $sous = $sd.Nom; break }
+                }
             }
+            return [pscustomobject]@{ Categorie = $cat.Nom; SousDossier = $sous }
         }
     }
-    return $DossierNonClasse
+    return [pscustomobject]@{ Categorie = $DossierNonClasse; SousDossier = "" }
 }
 
-# Donne un chemin de destination unique (gere les doublons de nom).
+# Nettoie le nom d'origine pour en faire le "contenu" lisible.
+function Nettoyer-Contenu {
+    param([string]$NomSansExt)
+    $t = $NomSansExt
+    $t = $t -replace '_', ' '                      # underscores -> espaces
+    $t = $t -replace '^\s*\d+[\.\)\-]\s*', ''      # enleve "5." "4) " en debut
+    $t = $t -replace '\s*\(\d+\)\s*$', ''          # enleve " (1)" copie en fin
+    $t = [Regex]::Replace($t, '\s+', ' ').Trim()
+    if ([string]::IsNullOrWhiteSpace($t)) { $t = $NomSansExt.Trim() }
+    return $t
+}
+
+# Detecte si le nom contient deja une date (annee 19xx/20xx).
+function Contient-Date {
+    param([string]$Texte)
+    return ($Texte -match '(19|20)\d{2}')
+}
+
 function Chemin-Unique {
     param([string]$Dossier, [string]$NomFichier)
     $base = [IO.Path]::GetFileNameWithoutExtension($NomFichier)
@@ -156,40 +240,45 @@ function Chemin-Unique {
     return $cible
 }
 
+# Enleve les caracteres interdits dans un nom de fichier Windows.
+function Nom-Valide {
+    param([string]$Nom)
+    $invalides = [IO.Path]::GetInvalidFileNameChars() -join ''
+    $pattern = "[" + [Regex]::Escape($invalides) + "]"
+    return ([Regex]::Replace($Nom, $pattern, ' ') -replace '\s+', ' ').Trim()
+}
+
 # ============================================================================
 #  3) PREPARATION
 # ============================================================================
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Cyan
 if ($Executer) {
-    Write-Host "  MODE REEL : les fichiers vont etre $([string]::Format('{0}', $(if($Copier){'COPIES'}else{'DEPLACES'})))." -ForegroundColor Yellow
+    $verbe = if ($Copier) { "COPIES" } else { "DEPLACES" }
+    Write-Host "  MODE REEL : les fichiers vont etre $verbe + renommes." -ForegroundColor Yellow
 } else {
     Write-Host "  MODE SIMULATION : aucun fichier ne sera deplace." -ForegroundColor Green
 }
 Write-Host "  Source      : $Source"
 Write-Host "  Destination : $Destination"
+if ($GarderNoms) { Write-Host "  Renommage   : NON (-GarderNoms)" } else { Write-Host "  Renommage   : OUI  (Affaire - contenu - date si utile)" }
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host ""
 
 if (-not (Test-Path -LiteralPath $Source)) {
     Write-Host "ERREUR : le dossier source n'existe pas : $Source" -ForegroundColor Red
-    Write-Host "Relance le script en precisant le bon chemin, par ex. :" -ForegroundColor Red
-    Write-Host '  .\Trier-Documents.ps1 -Source "C:\Users\TonNom\Documents"' -ForegroundColor Red
+    Write-Host 'Relance en precisant le chemin, ex : .\Trier-Documents.ps1 -Source "C:\Users\TonNom\Documents"' -ForegroundColor Red
     return
 }
 
-# On evite de re-scanner le dossier de classement lui-meme.
 $DestFull = [IO.Path]::GetFullPath($Destination)
 
 Write-Host "Scan en cours..." -ForegroundColor Gray
 $fichiers = Get-ChildItem -LiteralPath $Source -File -Recurse -Force -ErrorAction SilentlyContinue |
     Where-Object {
-        # Ignore le dossier de destination
         (-not $_.FullName.StartsWith($DestFull, [StringComparison]::OrdinalIgnoreCase)) -and
-        # Ignore les fichiers caches/systeme
         (-not ($_.Attributes -band [IO.FileAttributes]::Hidden)) -and
         (-not ($_.Attributes -band [IO.FileAttributes]::System)) -and
-        # Filtre par extension (sauf si $ToutInclure)
         ($ToutInclure -or ($ExtensionsDocs -contains $_.Extension.ToLower()))
     }
 
@@ -197,7 +286,6 @@ if (-not $fichiers -or $fichiers.Count -eq 0) {
     Write-Host "Aucun document trouve a trier dans : $Source" -ForegroundColor Yellow
     return
 }
-
 Write-Host ("$($fichiers.Count) document(s) trouve(s).") -ForegroundColor Gray
 Write-Host ""
 
@@ -209,24 +297,41 @@ $plan = New-Object System.Collections.Generic.List[object]
 
 foreach ($f in $fichiers) {
     $rel = $f.FullName.Substring($Source.Length).TrimStart('\','/')
-    $categorie = Trouver-Categorie $rel
+    $cl  = Trouver-Classement $rel
 
-    $nouveauNom = $f.Name
-    if ($Renommer) {
-        $date = $f.LastWriteTime.ToString("yyyy-MM-dd")
-        # Evite de doubler la date si elle est deja en debut de nom
-        if ($f.Name -notmatch '^\d{4}-\d{2}-\d{2}') {
-            $nouveauNom = "{0}_{1}" -f $date, $f.Name
+    # Dossier cible (categorie + sous-dossier eventuel)
+    $dossierCible = Join-Path $Destination $cl.Categorie
+    if ($cl.SousDossier) { $dossierCible = Join-Path $dossierCible $cl.SousDossier }
+
+    # Nouveau nom
+    if ($GarderNoms) {
+        $nouveauNom = $f.Name
+    } else {
+        $ext      = $f.Extension
+        $contenu  = Nettoyer-Contenu ([IO.Path]::GetFileNameWithoutExtension($f.Name))
+        $prefixe  = $cl.Categorie
+        $nom      = "$prefixe - $contenu"
+        # Date : ajoutee si demandee (-AvecDate) et absente du nom
+        if ($AvecDate -and -not (Contient-Date $contenu)) {
+            $nom = "$nom - " + $f.LastWriteTime.ToString("yyyy-MM-dd")
         }
+        $nouveauNom = (Nom-Valide $nom) + $ext
     }
 
-    $dossierCible = Join-Path $Destination $categorie
     $cible = Chemin-Unique -Dossier $dossierCible -NomFichier $nouveauNom
+    # Si collision et qu'on a renomme sans date : la date sert a desambiguer
+    if (-not $GarderNoms -and -not $AvecDate -and ([IO.Path]::GetFileName($cible) -ne $nouveauNom)) {
+        $ext     = $f.Extension
+        $sansExt = [IO.Path]::GetFileNameWithoutExtension($nouveauNom)
+        $avecDate = (Nom-Valide ($sansExt + " - " + $f.LastWriteTime.ToString("yyyy-MM-dd"))) + $ext
+        $cible = Chemin-Unique -Dossier $dossierCible -NomFichier $avecDate
+    }
     $script:CiblesPrevues += $cible
 
     $plan.Add([pscustomobject]@{
-        Categorie   = $categorie
-        Fichier     = $f.Name
+        Categorie   = $cl.Categorie
+        SousDossier = $cl.SousDossier
+        AncienNom   = $f.Name
         NouveauNom  = [IO.Path]::GetFileName($cible)
         Source      = $f.FullName
         Destination = $cible
@@ -235,32 +340,46 @@ foreach ($f in $fichiers) {
 }
 
 # ============================================================================
-#  5) AFFICHAGE DU RECAPITULATIF
+#  5) RECAPITULATIF
 # ============================================================================
 Write-Host "RECAPITULATIF PAR DOSSIER :" -ForegroundColor Cyan
 Write-Host "----------------------------------------------------------------"
 $ordre = ($Categories.Nom + $DossierNonClasse)
 foreach ($nom in $ordre) {
-    $n = ($plan | Where-Object { $_.Categorie -eq $nom }).Count
+    $sousPlan = $plan | Where-Object { $_.Categorie -eq $nom }
+    $n = ($sousPlan | Measure-Object).Count
     if ($n -gt 0) {
         $couleur = if ($nom -eq $DossierNonClasse) { "Yellow" } else { "White" }
         Write-Host ("  {0,-22} : {1,4} fichier(s)" -f $nom, $n) -ForegroundColor $couleur
+        # Detail des sous-dossiers
+        $sousNoms = $sousPlan | Where-Object { $_.SousDossier } | Select-Object -ExpandProperty SousDossier -Unique | Sort-Object
+        foreach ($sn in $sousNoms) {
+            $ns = ($sousPlan | Where-Object { $_.SousDossier -eq $sn } | Measure-Object).Count
+            Write-Host ("      - {0,-18} : {1,4}" -f $sn, $ns) -ForegroundColor DarkGray
+        }
     }
 }
 Write-Host "----------------------------------------------------------------"
 Write-Host ("  {0,-22} : {1,4} fichier(s)" -f "TOTAL", $plan.Count) -ForegroundColor Cyan
 Write-Host ""
 
-# Toujours ecrire le plan detaille dans un CSV (ouvrable dans Excel).
-if (-not (Test-Path -LiteralPath $Destination)) {
-    if ($Executer) { New-Item -ItemType Directory -Path $Destination -Force | Out-Null }
+# Apercu de quelques renommages
+if (-not $GarderNoms) {
+    Write-Host "EXEMPLES DE RENOMMAGE (avant  ->  apres) :" -ForegroundColor Cyan
+    $plan | Where-Object { $_.Categorie -ne $DossierNonClasse } | Select-Object -First 8 | ForEach-Object {
+        Write-Host ("  {0}" -f $_.AncienNom) -ForegroundColor DarkGray
+        Write-Host ("    -> {0}\{1}\{2}" -f $_.Categorie, $_.SousDossier, $_.NouveauNom) -ForegroundColor Gray
+    }
+    Write-Host ""
 }
+
+# CSV detaille
 $dossierRapport = if (Test-Path -LiteralPath $Destination) { $Destination } else { $Source }
 $csvPath = Join-Path $dossierRapport "Plan-de-classement.csv"
 try {
-    $plan | Sort-Object Categorie, Fichier |
+    $plan | Sort-Object Categorie, SousDossier, NouveauNom |
         Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8 -Delimiter ';'
-    Write-Host "Plan detaille enregistre ici (ouvre-le dans Excel pour verifier) :" -ForegroundColor Green
+    Write-Host "Plan detaille (ouvre-le dans Excel pour tout verifier) :" -ForegroundColor Green
     Write-Host "  $csvPath" -ForegroundColor Green
     Write-Host ""
 } catch {
@@ -268,13 +387,12 @@ try {
 }
 
 # ============================================================================
-#  6) EXECUTION (uniquement si -Executer)
+#  6) EXECUTION (uniquement avec -Executer)
 # ============================================================================
 if (-not $Executer) {
     Write-Host "================================================================" -ForegroundColor Green
     Write-Host "  SIMULATION TERMINEE - aucun fichier n'a ete deplace." -ForegroundColor Green
     Write-Host "  Verifie le fichier Plan-de-classement.csv ci-dessus." -ForegroundColor Green
-    Write-Host ""
     Write-Host "  Quand tout te convient, relance avec -Executer :" -ForegroundColor Green
     Write-Host "    .\Trier-Documents.ps1 -Executer" -ForegroundColor White
     Write-Host "================================================================" -ForegroundColor Green
@@ -284,7 +402,6 @@ if (-not $Executer) {
 Write-Host "Tri en cours..." -ForegroundColor Gray
 $journal = New-Object System.Collections.Generic.List[object]
 $ok = 0; $erreurs = 0
-
 foreach ($item in $plan) {
     try {
         $dossierCible = Split-Path -Parent $item.Destination
@@ -308,11 +425,10 @@ Write-Host ""
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host ("  TERMINE : {0} fichier(s) traite(s), {1} erreur(s)." -f $ok, $erreurs) -ForegroundColor Cyan
 
-# Script d'annulation (remet tout comme avant) - seulement si on a DEPLACE.
 if (-not $Copier -and $journal.Count -gt 0) {
     $undoPath = Join-Path $Destination "Annuler-le-tri.ps1"
     $lignes = New-Object System.Collections.Generic.List[string]
-    $lignes.Add('# Annule le tri : remet chaque fichier a son emplacement d''origine.')
+    $lignes.Add('# Annule le tri : remet chaque fichier a son emplacement et nom d''origine.')
     $lignes.Add('$ErrorActionPreference = "Continue"')
     foreach ($j in $journal) {
         $src = $j.Vers.Replace("'", "''")
